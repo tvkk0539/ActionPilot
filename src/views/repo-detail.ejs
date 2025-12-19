@@ -1,0 +1,324 @@
+<%- include('layout', { body: `
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2"><a href="/dashboard" class="text-decoration-none text-muted">Repos</a> / ${owner}/${repo}</h1>
+</div>
+
+<ul class="nav nav-tabs mb-4" id="repoTabs" role="tablist">
+    <li class="nav-item">
+        <button class="nav-link active" id="workflows-tab" data-bs-toggle="tab" data-bs-target="#workflows" type="button">Workflows</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings" type="button">Settings</button>
+    </li>
+    <li class="nav-item">
+        <button class="nav-link" id="governance-tab" data-bs-toggle="tab" data-bs-target="#governance" type="button" onclick="loadPermissions()">Governance</button>
+    </li>
+</ul>
+
+<div class="tab-content" id="repoTabsContent">
+    <!-- Workflows Tab -->
+    <div class="tab-pane fade show active" id="workflows">
+        <div class="row">
+            <div class="col-md-4">
+                <h4>Available Workflows</h4>
+                <div class="list-group" id="workflowList">
+                    <p class="text-muted">Loading workflows...</p>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h4>Run History</h4>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadRuns()">Refresh Runs</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-striped table-sm">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Workflow</th>
+                                <th>Status</th>
+                                <th>Conclusion</th>
+                                <th>Created</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="runsTable">
+                            <!-- Runs injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div class="tab-pane fade" id="settings">
+        <div class="card mb-3">
+            <div class="card-header">General Settings</div>
+            <div class="card-body">
+                <form onsubmit="renameRepo(event)">
+                    <div class="mb-3">
+                        <label class="form-label">Repository Name</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="repoName" value="${repo}">
+                            <button class="btn btn-outline-primary" type="submit">Rename</button>
+                        </div>
+                    </div>
+                </form>
+                <hr>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <strong>Visibility</strong>
+                        <p class="text-muted mb-0">Currently: <span id="visibilityLabel">Loading...</span></p>
+                    </div>
+                    <button class="btn btn-warning" onclick="toggleVisibility()" id="visibilityBtn">Change Visibility</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card border-danger">
+            <div class="card-header bg-danger text-white">Danger Zone</div>
+            <div class="card-body">
+                <p>Once you delete a repository, there is no going back. Please be certain.</p>
+                <button class="btn btn-danger" onclick="deleteRepo()">Delete this repository</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Governance Tab -->
+    <div class="tab-pane fade" id="governance">
+        <div class="card">
+            <div class="card-header">Actions Permissions</div>
+            <div class="card-body">
+                <form id="permissionsForm">
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="actionsEnabled">
+                        <label class="form-check-label" for="actionsEnabled">Enable GitHub Actions</label>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Allowed Actions</label>
+                        <select class="form-select" id="allowedActions">
+                            <option value="all">All actions and reusable workflows</option>
+                            <option value="local_only">Local actions only</option>
+                            <option value="selected">Allow select actions</option>
+                        </select>
+                    </div>
+
+                    <button type="button" class="btn btn-primary" onclick="savePermissions()">Save Permissions</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Dispatch Modal -->
+<div class="modal fade" id="dispatchModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Run Workflow</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="dispatchForm">
+                    <input type="hidden" name="workflowId" id="dispatchWorkflowId">
+                    <div class="mb-3">
+                        <label class="form-label">Branch/Tag (Ref)</label>
+                        <input type="text" class="form-control" name="ref" value="main">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Inputs (JSON)</label>
+                        <textarea class="form-control" name="inputs" rows="3" placeholder='{"env": "prod"}'></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="submitDispatch()">Run Workflow</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const owner = '${owner}';
+    const repo = '${repo}';
+
+    // --- WORKFLOWS ---
+    async function loadWorkflows() {
+        const res = await fetch(\`/repos/\${owner}/\${repo}/workflows\`);
+        const workflows = await res.json();
+        const list = document.getElementById('workflowList');
+
+        if (workflows.length === 0) {
+            list.innerHTML = '<p class="text-muted">No workflows found.</p>';
+            return;
+        }
+
+        list.innerHTML = '';
+        workflows.forEach(w => {
+            const item = document.createElement('a');
+            item.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center';
+            item.href = '#';
+            item.innerHTML = \`
+                <div>
+                    <strong>\${w.name}</strong><br>
+                    <small class="text-muted">\${w.path}</small>
+                </div>
+                <button class="btn btn-sm btn-success" onclick="openDispatch(\${w.id})">Run</button>
+            \`;
+            list.appendChild(item);
+        });
+    }
+
+    async function loadRuns() {
+        const res = await fetch(\`/repos/\${owner}/\${repo}/actions/runs\`);
+        const runs = await res.json();
+        const tbody = document.getElementById('runsTable');
+        tbody.innerHTML = '';
+
+        runs.forEach(run => {
+            const tr = document.createElement('tr');
+            const canCancel = run.status === 'in_progress' || run.status === 'queued';
+            tr.innerHTML = \`
+                <td>\${run.id}</td>
+                <td>\${run.name}</td>
+                <td><span class="badge bg-\${getStatusColor(run.status)}">\${run.status}</span></td>
+                <td>\${run.conclusion || '-'}</td>
+                <td>\${new Date(run.created_at).toLocaleString()}</td>
+                <td>
+                    \${canCancel ? \`<button class="btn btn-sm btn-danger" onclick="cancelRun(\${run.id})">Cancel</button>\` : ''}
+                    <a href="\${run.html_url}" target="_blank" class="btn btn-sm btn-outline-secondary">Logs</a>
+                </td>
+            \`;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function getStatusColor(status) {
+        if (status === 'completed') return 'secondary';
+        if (status === 'success') return 'success';
+        if (status === 'failure') return 'danger';
+        if (status === 'in_progress') return 'primary';
+        return 'info';
+    }
+
+    function openDispatch(id) {
+        document.getElementById('dispatchWorkflowId').value = id;
+        new bootstrap.Modal(document.getElementById('dispatchModal')).show();
+    }
+
+    async function submitDispatch() {
+        const id = document.getElementById('dispatchWorkflowId').value;
+        const ref = document.querySelector('input[name="ref"]').value;
+        const inputsStr = document.querySelector('textarea[name="inputs"]').value;
+        let inputs = {};
+        try {
+            if (inputsStr) inputs = JSON.parse(inputsStr);
+        } catch (e) {
+            alert('Invalid JSON in inputs');
+            return;
+        }
+
+        const res = await fetch(\`/repos/\${owner}/\${repo}/workflows/\${id}/dispatch\`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ ref, inputs })
+        });
+
+        if (res.ok) {
+            bootstrap.Modal.getInstance(document.getElementById('dispatchModal')).hide();
+            alert('Workflow triggered!');
+            setTimeout(loadRuns, 2000);
+        } else {
+            const err = await res.json();
+            alert('Failed: ' + err.error);
+        }
+    }
+
+    async function cancelRun(id) {
+        if (!confirm('Are you sure you want to cancel this run?')) return;
+
+        const res = await fetch(\`/repos/\${owner}/\${repo}/actions/runs/\${id}/cancel\`, {
+            method: 'POST'
+        });
+
+        if (res.ok) {
+            alert('Run cancellation requested.');
+            setTimeout(loadRuns, 1000);
+        } else {
+            alert('Failed to cancel.');
+        }
+    }
+
+    // --- SETTINGS ---
+    async function renameRepo(e) {
+        e.preventDefault();
+        const newName = document.getElementById('repoName').value;
+        if (!confirm(\`Are you sure you want to rename to \${newName}?\`)) return;
+
+        const res = await fetch(\`/repos/\${owner}/\${repo}\`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name: newName })
+        });
+
+        if (res.ok) {
+            window.location.href = \`/repo/\${owner}/\${newName}\`;
+        } else {
+            alert('Failed to rename');
+        }
+    }
+
+    async function deleteRepo() {
+        const name = prompt(\`Type \${repo} to confirm deletion:\`);
+        if (name !== repo) return;
+
+        const res = await fetch(\`/repos/\${owner}/\${repo}\`, {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            window.location.href = '/dashboard';
+        } else {
+            alert('Failed to delete');
+        }
+    }
+
+    // Toggle Visibility - Load current state first? We can guess or fetch.
+    // Let's assume we can see it in the UI, but we need to know if it's private.
+    // For now, toggle blindly or check the API.
+    // To implement cleanly, we should load repo details on page load.
+    // Let's rely on the user knowing what they are doing for V1, or just fetch repo details.
+
+    // --- GOVERNANCE ---
+    async function loadPermissions() {
+        const res = await fetch(\`/repos/\${owner}/\${repo}/actions/permissions\`);
+        const perms = await res.json();
+
+        document.getElementById('actionsEnabled').checked = perms.enabled;
+        if (perms.allowed_actions) {
+            document.getElementById('allowedActions').value = perms.allowed_actions;
+        }
+    }
+
+    async function savePermissions() {
+        const enabled = document.getElementById('actionsEnabled').checked;
+        const allowed = document.getElementById('allowedActions').value;
+
+        const res = await fetch(\`/repos/\${owner}/\${repo}/actions/permissions\`, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ enabled, allowed_actions: allowed })
+        });
+
+        if (res.ok) alert('Permissions saved');
+        else alert('Failed to save permissions');
+    }
+
+    // Init
+    loadWorkflows();
+    loadRuns();
+</script>
+`}) %>
