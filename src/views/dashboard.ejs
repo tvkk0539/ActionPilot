@@ -1,0 +1,313 @@
+<%- include('layout', { body: `
+<div class="row">
+    <!-- Sidebar: Accounts -->
+    <div class="col-md-3 col-lg-2 sidebar bg-light collapse d-md-block">
+        <div class="sidebar-sticky pt-3">
+            <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+                <span>Accounts</span>
+                <a class="link-secondary" href="#" onclick="addAccount()" title="Add Account">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-plus" viewBox="0 0 16 16"><path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/></svg>
+                </a>
+            </h6>
+            <div class="px-3 mb-2">
+                <input type="text" id="accountSearch" class="form-control form-control-sm" placeholder="Search accounts...">
+            </div>
+            <ul class="nav flex-column" id="accountList">
+                <!-- Accounts injected via JS -->
+            </ul>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="col-md-9 ms-sm-auto col-lg-10 px-md-4">
+        <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+            <h1 class="h2">Repositories</h1>
+            <div class="btn-toolbar mb-2 mb-md-0">
+                <div class="btn-group me-2">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="loadRepos(1)">Refresh</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#newRepoModal">New Repo</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#cloneRepoModal">Clone Template</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="row mb-3">
+            <div class="col-md-4">
+                <input type="text" id="repoSearch" class="form-control" placeholder="Filter by name..." onkeyup="filterRepos()">
+            </div>
+            <div class="col-md-8 text-end">
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="repoType" id="typeAll" value="all" checked onchange="loadRepos(1)">
+                    <label class="form-check-label" for="typeAll">All</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="repoType" id="typePublic" value="public" onchange="loadRepos(1)">
+                    <label class="form-check-label" for="typePublic">Public</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="repoType" id="typePrivate" value="private" onchange="loadRepos(1)">
+                    <label class="form-check-label" for="typePrivate">Private</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="repoType" id="typeForks" value="forks" onchange="loadRepos(1)">
+                    <label class="form-check-label" for="typeForks">Forks</label>
+                </div>
+            </div>
+        </div>
+
+        <div id="repoList" class="row">
+            <!-- Repos injected here -->
+            <p class="text-center">Loading repositories...</p>
+        </div>
+
+        <nav aria-label="Page navigation" class="mt-4">
+          <ul class="pagination justify-content-center" id="pagination">
+             <!-- Pagination -->
+          </ul>
+        </nav>
+    </div>
+</div>
+
+<!-- New Repo Modal -->
+<div class="modal fade" id="newRepoModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create New Repository</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="newRepoForm">
+                    <div class="mb-3">
+                        <label class="form-label">Name</label>
+                        <input type="text" class="form-control" name="name" required>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="private" checked>
+                        <label class="form-check-label">Private</label>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="auto_init" checked>
+                        <label class="form-check-label">Initialize with README</label>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="createRepo()">Create</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Clone Repo Modal -->
+<div class="modal fade" id="cloneRepoModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Clone from Template</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="cloneRepoForm">
+                    <div class="mb-3">
+                        <label class="form-label">Template Owner</label>
+                        <input type="text" class="form-control" name="template_owner" placeholder="e.g. facebook" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Template Repo</label>
+                        <input type="text" class="form-control" name="template_repo" placeholder="e.g. react" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">New Repo Name</label>
+                        <input type="text" class="form-control" name="name" required>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" name="private" checked>
+                        <label class="form-check-label">Private</label>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" onclick="cloneRepo()">Clone</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentAccounts = [];
+    let currentRepos = [];
+    let currentPage = 1;
+
+    // --- ACCOUNTS ---
+    async function loadAccounts() {
+        const res = await fetch('/accounts');
+        currentAccounts = await res.json();
+        renderAccounts();
+    }
+
+    function renderAccounts() {
+        const search = document.getElementById('accountSearch').value.toLowerCase();
+        const list = document.getElementById('accountList');
+        list.innerHTML = '';
+
+        currentAccounts.filter(a => a.username.toLowerCase().includes(search) || a.label.toLowerCase().includes(search)).forEach(acc => {
+            const li = document.createElement('li');
+            li.className = 'nav-item';
+            li.innerHTML = \`
+                <a class="nav-link \${acc.isActive ? 'active' : ''}" href="#" onclick="switchAccount('\${acc.label}')">
+                    <span data-feather="users"></span>
+                    \${acc.label} \${acc.isActive ? '(Active)' : ''}
+                </a>
+            \`;
+            list.appendChild(li);
+        });
+    }
+
+    document.getElementById('accountSearch').addEventListener('input', renderAccounts);
+
+    async function switchAccount(label) {
+        await fetch('/accounts/switch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ label })
+        });
+        window.location.reload();
+    }
+
+    function addAccount() {
+        const label = prompt("Enter a label for this account (e.g., 'Work', 'Personal'):");
+        if (label) {
+            window.location.href = \`/connect/github?label=\${encodeURIComponent(label)}\`;
+        }
+    }
+
+    // --- REPOS ---
+    async function loadRepos(page) {
+        currentPage = page;
+        const type = document.querySelector('input[name="repoType"]:checked').value;
+        const container = document.getElementById('repoList');
+        container.innerHTML = '<p class="text-center">Loading...</p>';
+
+        try {
+            const res = await fetch(\`/repos?page=\${page}&type=\${type}\`);
+            if (res.status === 401 || res.status === 500) {
+                 const err = await res.json();
+                 container.innerHTML = \`<div class="alert alert-danger">\${err.error || 'Error loading repos'}</div>\`;
+                 return;
+            }
+            currentRepos = await res.json();
+            renderRepos();
+            renderPagination();
+        } catch (e) {
+            container.innerHTML = '<div class="alert alert-danger">Failed to load repositories. Check if you have an active account selected.</div>';
+        }
+    }
+
+    function renderRepos() {
+        const search = document.getElementById('repoSearch').value.toLowerCase();
+        const container = document.getElementById('repoList');
+        container.innerHTML = '';
+
+        const filtered = currentRepos.filter(r => r.name.toLowerCase().includes(search));
+
+        if (filtered.length === 0) {
+            container.innerHTML = '<p class="text-center text-muted">No repositories found.</p>';
+            return;
+        }
+
+        filtered.forEach(repo => {
+            const card = document.createElement('div');
+            card.className = 'col-md-6 col-lg-4 mb-4';
+            card.innerHTML = \`
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body">
+                        <h5 class="card-title d-flex justify-content-between align-items-center">
+                            <a href="/repo/\${repo.owner.login}/\${repo.name}" class="text-decoration-none">\${repo.name}</a>
+                            \${repo.private ? '<span class="badge bg-warning text-dark">Private</span>' : '<span class="badge bg-success">Public</span>'}
+                        </h5>
+                        <p class="card-text text-muted small">\${repo.description || 'No description'}</p>
+                        <div class="d-flex justify-content-between align-items-center mt-3">
+                            <small class="text-muted">Updated: \${new Date(repo.updated_at).toLocaleDateString()}</small>
+                            <a href="/repo/\${repo.owner.login}/\${repo.name}" class="btn btn-sm btn-outline-primary">Manage</a>
+                        </div>
+                    </div>
+                </div>
+            \`;
+            container.appendChild(card);
+        });
+    }
+
+    function filterRepos() {
+        renderRepos();
+    }
+
+    function renderPagination() {
+        const pagination = document.getElementById('pagination');
+        pagination.innerHTML = '';
+
+        // Simple prev/next logic
+        if (currentPage > 1) {
+            pagination.innerHTML += \`<li class="page-item"><a class="page-link" href="#" onclick="loadRepos(\${currentPage - 1})">Previous</a></li>\`;
+        }
+        // We don't know total pages from API easily without Link header parsing, assume next exists if currentRepos.length == 100
+        if (currentRepos.length === 100) {
+            pagination.innerHTML += \`<li class="page-item"><a class="page-link" href="#" onclick="loadRepos(\${currentPage + 1})">Next</a></li>\`;
+        }
+    }
+
+    // --- ACTIONS ---
+    async function createRepo() {
+        const form = document.getElementById('newRepoForm');
+        const data = {
+            name: form.name.value,
+            private: form.private.checked,
+            auto_init: form.auto_init.checked
+        };
+
+        const res = await fetch('/repos', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+
+        if (res.ok) {
+            bootstrap.Modal.getInstance(document.getElementById('newRepoModal')).hide();
+            loadRepos(1);
+        } else {
+            alert('Failed to create repo');
+        }
+    }
+
+    async function cloneRepo() {
+        const form = document.getElementById('cloneRepoForm');
+        const data = {
+            template_owner: form.template_owner.value,
+            template_repo: form.template_repo.value,
+            name: form.name.value,
+            private: form.private.checked
+        };
+
+        const res = await fetch('/repos/generate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+
+        if (res.ok) {
+            bootstrap.Modal.getInstance(document.getElementById('cloneRepoModal')).hide();
+            loadRepos(1);
+        } else {
+            const err = await res.json();
+            alert('Failed to clone: ' + err.error);
+        }
+    }
+
+    // Init
+    loadAccounts();
+    loadRepos(1);
+</script>
+`}) %>
