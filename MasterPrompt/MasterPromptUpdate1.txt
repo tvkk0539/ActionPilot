@@ -1,0 +1,144 @@
+# MASTER PROMPT: Cloud Run GitHub Actions & Repo Manager (v2.1 - Automation Edition)
+
+## PROJECT GOAL
+Design and implement a secure, production-ready web application running on **Google Cloud Run** that allows authenticated users to perform full-cycle management of GitHub Repositories and Actions across multiple accounts.
+
+The application must be **Database Agnostic** (defaulting to Firestore), enforce a **Login-First** policy, and include **Full Automation Scripts** for deployment to both **Cloud Run** (Serverless) and **Virtual Machines** (Compute Engine/Ubuntu).
+
+### Core Capabilities
+1.  **Multi-Account Hub:** Authenticate via GitHub (OAuth), securely store tokens, and switch between accounts using a **searchable** interface (handling 100-500+ accounts).
+2.  **Repository Lifecycle:**
+    * **Fetch:** List repositories with **Pagination** and **Filtering** (Public vs. Private).
+    * **Manage:** Create, Rename, Delete, and Toggle Visibility (Public/Private).
+    * **Clone/Duplicate:** Create new repos from templates (using the `generate` API) or fork existing ones.
+3.  **Workflow Operations:**
+    * List workflows and run history.
+    * **Trigger** manual runs (`workflow_dispatch`).
+    * **Cancel** in-progress runs.
+4.  **Governance:** Toggle GitHub Actions ON/OFF and manage permissions.
+5.  **Security:** AES-256-GCM token encryption, "Login-First" guardrails, and Secret Manager integration.
+
+---
+
+## 1. ARCHITECTURE & DATABASE (Provider Pattern)
+
+### Database Abstraction
+* **Interface:** `IAccountsStore` (add, get, list, remove, update).
+* **Adapter:** Default to **Firestore**. Structure app to easily swap for Postgres/Mongo via `DB_PROVIDER` env var.
+* **Encryption:** All tokens must be encrypted (AES-256-GCM) in the *business layer* before reaching the database. Store only `ciphertext` and `iv`.
+
+---
+
+## 2. UI/UX FLOW & LAYOUT
+
+### A. Authentication & Account Switcher
+* **Login-First:** Unauthenticated users are redirected to `/login`.
+* **Account Selection (Searchable):**
+    * The "Switch Account" UI must include a **real-time search box**.
+    * Users can filter the account list by `username` or `email` before selecting.
+    * Optimized for users managing 100-500+ linked GitHub accounts.
+
+### B. Repository Dashboard (Master-Detail View)
+* **Level 1: Repository List (The "Master" View)**
+    * **Filters:** Checkboxes/Toggles for "Show Public", "Show Private", "Show Forks".
+    * **Search:** Filter visible repos by name.
+    * **Pagination:** UI must verify if more repos exist (handling GitHub API pagination limits) and provide a "Load More" or paginated view.
+* **Level 2: Selected Repository (The "Detail" View)**
+    * Once a repo is selected, show a tabbed interface:
+        * **Settings Tab:** Rename, Toggle Visibility (Public/Private), Delete Repo.
+        * **Actions Tab:** Enable/Disable Actions, View Permissions.
+        * **Workflows Tab:** List workflows, Trigger Dispatch, View Runs, **Cancel Runs**.
+
+---
+
+## 3. CORE FUNCTIONAL REQUIREMENTS & ENDPOINTS
+
+### A) Multi-Account OAuth & Storage
+* `GET /login`: Initiates OAuth.
+* `GET /accounts`: Returns list of linked accounts (scrubbed of sensitive data).
+* `POST /use-account`: Accepts `{ label }`. Backend decrypts that account's token and stores it in the active session.
+
+### B) Repository Fetching (Scalable)
+* `GET /repos`
+    * **Query Params:** `?page=1&per_page=100&type=(all|public|private)`
+    * **Logic:** Use Octokit pagination (or link headers) to fetch all pages if requested, or implement server-side pagination to keep the UI snappy.
+    * **Output:** JSON list including `name`, `private` (bool), `html_url`, `permissions` (admin/push/pull).
+
+### C) Repository Lifecycle Operations
+* **Create Repo:** `POST /repos`
+    * Body: `{ "name": "...", "private": true, "auto_init": true }`
+* **Clone/Template:** `POST /repos/generate`
+    * Logic: Use the GitHub "Create repository using a template" API (`POST /repos/{template_owner}/{template_repo}/generate`).
+* **Rename Repo:** `PATCH /repos/{owner}/{repo}`
+    * Body: `{ "name": "new-name" }`
+* **Toggle Visibility:** `PATCH /repos/{owner}/{repo}`
+    * Body: `{ "private": true/false }`
+    * **Safety:** Require explicit confirmation in UI before sending.
+* **Delete Repo:** `DELETE /repos/{owner}/{repo}`
+    * **Safety:** UI must force user to type the repo name to confirm deletion.
+
+### D) Workflow Management (Dispatch & Cancel)
+* **List Workflows:** `GET /repos/{owner}/{repo}/workflows`
+* **Trigger (Dispatch):** `POST /repos/{owner}/{repo}/workflows/{id}/dispatch`
+    * Body: `{ "ref": "main", "inputs": {...} }`
+* **List Runs:** `GET /repos/{owner}/{repo}/actions/runs`
+    * Show `status` (queued, in_progress, completed) and `conclusion` (success, failure).
+* **Cancel Run:** `POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel`
+    * Logic: Call GitHub API `POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel`.
+    * UI: Only show "Cancel" button if status is `in_progress` or `queued`.
+
+### E) Governance (Actions Permissions)
+* `PUT /repos/{owner}/{repo}/actions/permissions`
+    * Enable/Disable Actions (`enabled: false`).
+    * Allow specific actions (`allowed_actions: selected`).
+
+---
+
+## 4. AUTOMATION SCRIPTS (REQUIRED)
+
+The generator must produce two distinct Bash scripts for automated setup:
+
+### Script 1: Cloud Run Setup (`setup-cloudrun.sh`)
+This script must automate the Google Cloud environment setup:
+1.  **Enable APIs:** `run.googleapis.com`, `secretmanager.googleapis.com`, `firestore.googleapis.com`, `cloudbuild.googleapis.com`.
+2.  **IAM:** Create a Service Account and grant `roles/secretmanager.secretAccessor` and `roles/datastore.user`.
+3.  **Secrets:** Prompt the user for GitHub Client ID/Secret and the AES Encryption Key, then create versions in Secret Manager.
+4.  **Deploy:** Build the container (using Cloud Build) and deploy to Cloud Run with all secrets mounted as environment variables.
+
+### Script 2: VM / Bare Metal Setup (`setup-vm.sh`)
+This script must automate setting up a fresh Ubuntu/Debian VM:
+1.  **System:** Run `apt-get update` and install dependencies (`curl`, `git`, `build-essential`).
+2.  **Runtime:** Install Node.js (v18+ LTS) and npm.
+3.  **Application:** `git clone` the repo (or assume current directory), run `npm install`, and `npm run build`.
+4.  **Process Management:** Install `pm2` (globally) to manage the process and ensure it restarts on crash/reboot.
+5.  **Env:** Prompt user for environment variables and create a `.env` file locally.
+6.  **Firewall:** Instructions (or `ufw` commands) to open port 8080.
+
+---
+
+## 5. DELIVERABLES
+
+### A) Source Code (Node.js/Express preferred)
+* `src/server.ts`: Main app entry.
+* `src/routes/`: Repos, Workflows, Accounts.
+* `src/services/github.ts`: Octokit wrapper with pagination logic.
+* `src/database/`: `FirestoreAdapter` and `IAccountsStore` interface.
+* `views/`: Dashboard (searchable), Repo Details (tabbed).
+
+### B) Deployment Artifacts
+* `scripts/setup-cloudrun.sh`: **(See Section 4)**
+* `scripts/setup-vm.sh`: **(See Section 4)**
+* `Dockerfile`: Optimized for production.
+* `.env.example`: Template for environment variables.
+
+### C) Documentation (README.md)
+* **Setup:** Instructions for GitHub OAuth App creation.
+* **Cost Analysis:** Cloud Run cost estimation script.
+* **Usage:** Guide for "Searchable Account Switcher" and "Repo Lifecycle Management".
+* **Deployment:** Separate sections for "Deploy to Cloud Run" (using script 1) and "Deploy to VM" (using script 2).
+
+## INSTRUCTIONS TO GENERATOR
+1.  **Pagination:** Ensure Repo Fetching handles GitHub API pagination correctly.
+2.  **Search Logic:** Implement client-side filtering for the Account Switcher.
+3.  **Safety UI:** Add confirmation dialogs for Delete/Rename/Visibility operations.
+4.  **Scripts:** Ensure the Bash scripts are robust, using variables for Project ID and Service Name, and include comments explaining each step (e.g., `# Enabling APIs...`).
