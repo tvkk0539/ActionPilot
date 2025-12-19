@@ -1,0 +1,132 @@
+# MASTER PROMPT: Cloud Run GitHub Actions & Repo Manager (v2.0 - Complete Suite)
+
+## PROJECT GOAL
+Design and implement a secure, production-ready web application running on **Google Cloud Run** that allows authenticated users to perform full-cycle management of GitHub Repositories and Actions across multiple accounts.
+
+The application must be **Database Agnostic** (defaulting to Firestore), enforce a **Login-First** policy, and scale to support users with hundreds of repositories and accounts.
+
+### Core Capabilities
+1.  **Multi-Account Hub:** Authenticate via GitHub (OAuth), securely store tokens, and switch between accounts using a **searchable** interface (handling 100-500+ accounts).
+2.  **Repository Lifecycle:**
+    * **Fetch:** List repositories with **Pagination** and **Filtering** (Public vs. Private).
+    * **Manage:** Create, Rename, Delete, and Toggle Visibility (Public/Private).
+    * **Clone/Duplicate:** Create new repos from templates or fork existing ones.
+3.  **Workflow Operations:**
+    * List workflows and run history.
+    * **Trigger** manual runs (`workflow_dispatch`).
+    * **Cancel** in-progress runs.
+4.  **Governance:** Toggle GitHub Actions ON/OFF and manage permissions.
+5.  **Security:** AES-256-GCM token encryption, "Login-First" guardrails, and Secret Manager integration.
+
+---
+
+## 1. ARCHITECTURE & DATABASE (Provider Pattern)
+
+### Database Abstraction
+* **Interface:** `IAccountsStore` (add, get, list, remove, update).
+* **Adapter:** Default to **Firestore**. Structure app to easily swap for Postgres/Mongo via `DB_PROVIDER` env var.
+* **Encryption:** All tokens must be encrypted (AES-256-GCM) in the *business layer* before reaching the database. Store only `ciphertext` and `iv`.
+
+---
+
+## 2. UI/UX FLOW & LAYOUT
+
+### A. Authentication & Account Switcher
+* **Login-First:** Unauthenticated users are redirected to `/login`.
+* **Account Selection (Searchable):**
+    * The "Switch Account" UI must include a **real-time search box**.
+    * Users can filter the account list by `username` or `email` before selecting.
+    * Optimized for users managing 100-500+ linked GitHub accounts.
+
+### B. Repository Dashboard (Master-Detail View)
+* **Level 1: Repository List (The "Master" View)**
+    * **Filters:** Checkboxes/Toggles for "Show Public", "Show Private", "Show Forks".
+    * **Search:** Filter visible repos by name.
+    * **Pagination:** UI must verify if more repos exist (handling GitHub API pagination limits) and provide a "Load More" or paginated view.
+* **Level 2: Selected Repository (The "Detail" View)**
+    * Once a repo is selected, show a tabbed interface:
+        * **Settings Tab:** Rename, Toggle Visibility (Public/Private), Delete Repo.
+        * **Actions Tab:** Enable/Disable Actions, View Permissions.
+        * **Workflows Tab:** List workflows, Trigger Dispatch, View Runs, **Cancel Runs**.
+
+---
+
+## 3. CORE FUNCTIONAL REQUIREMENTS & ENDPOINTS
+
+### A) Multi-Account OAuth & Storage
+* `GET /login`: Initiates OAuth.
+* `GET /accounts`: Returns list of linked accounts (scrubbed of sensitive data).
+* `POST /use-account`: Accepts `{ label }`. Backend decrypts that account's token and stores it in the active session.
+
+### B) Repository Fetching (Scalable)
+* `GET /repos`
+    * **Query Params:** `?page=1&per_page=100&type=(all|public|private)`
+    * **Logic:** Use Octokit pagination (or link headers) to fetch all pages if requested, or implement server-side pagination to keep the UI snappy.
+    * **Output:** JSON list including `name`, `private` (bool), `html_url`, `permissions` (admin/push/pull).
+
+### C) Repository Lifecycle Operations
+* **Create Repo:** `POST /repos`
+    * Body: `{ "name": "...", "private": true, "auto_init": true }`
+* **Clone/Template:** `POST /repos/generate`
+    * Logic: Use the GitHub "Create repository using a template" API (`POST /repos/{template_owner}/{template_repo}/generate`).
+* **Rename Repo:** `PATCH /repos/{owner}/{repo}`
+    * Body: `{ "name": "new-name" }`
+* **Toggle Visibility:** `PATCH /repos/{owner}/{repo}`
+    * Body: `{ "private": true/false }`
+    * **Safety:** Require explicit confirmation in UI before sending.
+* **Delete Repo:** `DELETE /repos/{owner}/{repo}`
+    * **Safety:** UI must force user to type the repo name to confirm deletion.
+
+### D) Workflow Management (Dispatch & Cancel)
+* **List Workflows:** `GET /repos/{owner}/{repo}/workflows`
+* **Trigger (Dispatch):** `POST /repos/{owner}/{repo}/workflows/{id}/dispatch`
+    * Body: `{ "ref": "main", "inputs": {...} }`
+* **List Runs:** `GET /repos/{owner}/{repo}/actions/runs`
+    * Show `status` (queued, in_progress, completed) and `conclusion` (success, failure).
+* **Cancel Run:** `POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel`
+    * Logic: Call GitHub API `POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel`.
+    * UI: Only show "Cancel" button if status is `in_progress` or `queued`.
+
+### E) Governance (Actions Permissions)
+* `PUT /repos/{owner}/{repo}/actions/permissions`
+    * Enable/Disable Actions (`enabled: false`).
+    * Allow specific actions (`allowed_actions: selected`).
+
+---
+
+## 4. SECURITY & COMPLIANCE
+
+* **Global Auth Guard:** Middleware on ALL routes (except `/login`). Checks `req.session.user`.
+* **Allowlist:** Optional `ALLOWED_USERS` env var to restrict access to specific GitHub handles.
+* **Destructive Actions:** "Delete Repo" and "Make Public" are high-risk. Implement a "Danger Zone" UI pattern with double-confirmation (e.g., "Type 'delete-my-repo' to confirm").
+* **Secrets:** Load `GITHUB_CLIENT_SECRET`, `DATA_ENCRYPTION_KEY` from Google Secret Manager.
+
+---
+
+## 5. DELIVERABLES
+
+### A) Source Code (Node.js/Express preferred)
+* `src/server.ts`: Main app entry.
+* `src/routes/`:
+    * `repos.ts`: Handles Fetch, Create, Rename, Delete, Visibility.
+    * `workflows.ts`: Handles List, Dispatch, Cancel.
+    * `accounts.ts`: Handles OAuth callback and Account Switching.
+* `src/services/github.ts`: Octokit wrapper handling pagination and rate limiting.
+* `src/database/`: `FirestoreAdapter` and `IAccountsStore` interface.
+* `views/`:
+    * `dashboard.ejs`: The searchable account list + repo filters.
+    * `repo-detail.ejs`: The tabbed view for Settings/Actions/Workflows.
+
+### B) Documentation (README.md)
+* **Setup:** Instructions for GitHub OAuth App creation.
+* **Cost Analysis:** Include the Cloud Run cost estimation script.
+* **Usage Guide:**
+    * How to switch accounts using the search bar.
+    * How to "Clone" (Template generation) vs Create New.
+    * Warning about "Delete Repo" permanence.
+
+## INSTRUCTIONS TO GENERATOR
+1.  **Pagination is Critical:** Ensure the code for fetching repositories handles the GitHub API pagination logic (fetching >100 repos) efficiently.
+2.  **Search Logic:** Implement client-side filtering (JavaScript) for the Account Switcher (since <500 items is manageable in browser memory) but server-side pagination for Repositories.
+3.  **Safety UI:** Generate code that includes modals or JavaScript `confirm()` dialogs for Rename, Delete, and Visibility changes.
+4.  **Database:** Ensure the Firestore adapter implementation is included as the default storage mechanism.
