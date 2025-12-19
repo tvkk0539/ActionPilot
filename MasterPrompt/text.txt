@@ -1,0 +1,402 @@
+
+MERGED PROMPT (Original wording preserved)
+===========================================
+
+[Merged from File One]
+
+MASTER PROMPT — Build a Google Cloud Run web app to manage GitHub Actions (login, pick repo, run workflow, enable/disable)
+
+GOAL
+Design and implement a secure, production‑ready web application running on Google Cloud Run that lets a signed‑in user (via GitHub) do ALL of the following:
+1) Authenticate with GitHub (OAuth App or GitHub App) and obtain an access token.
+2) List repositories the user/app can access.
+3) List Actions workflows within a selected repository.
+4) Manually trigger a workflow run via the REST API (requires `on: workflow_dispatch`).
+5) Read current GitHub Actions settings for the repository.
+6) Toggle GitHub Actions ON/OFF (and optionally restrict allowed actions) for that repository.
+7) Store and manage secrets (GitHub client secret, PAT/app tokens) using Google Secret Manager.
+8) Provide a simple and safe UI for the above operations, including status and logs of workflow runs.
+
+PRIMARY USE CASES (User Stories)
+- As a user, I can sign in with GitHub and see my accessible repositories.
+- As a user, I can open a repository, see its workflows, and trigger any workflow that supports `workflow_dispatch`, passing inputs and selecting `ref` (branch/tag).
+- As a user, I can view whether Actions are currently enabled for the repository and toggle them ON/OFF.
+- As an org admin, I can see if org policies override repo settings (read‑only indicators in UI).
+- As a user, I can see the latest workflow run results (status, job list, logs URL) for the workflow I triggered.
+
+TARGET PLATFORM & RUNTIME
+- Host the app on **Google Cloud Run** (containerized HTTP service).
+- Use **Google Secret Manager** for secrets.
+- Use **GitHub REST APIs** for workflows and Actions permissions.
+- Language: You may choose **Node.js (Express)** or **Python (Flask/FastAPI)** for the service; provide full scaffolding for one language (preferred: Node.js + Express) and brief code stubs for the other.
+
+SECURITY & COMPLIANCE REQUIREMENTS
+- Never hardcode secrets (client secrets, PATs, private keys). Load them from Secret Manager at startup or on demand.
+- Use OAuth state parameter and CSRF protection on the callback. Store tokens server‑side.
+- Apply least‑privilege GitHub scopes. For private repos, use `repo` scope; for Actions changes at org level, use `admin:org`. For GitHub App, request fine‑grained permissions (e.g., `actions:write`, `metadata:read`).
+- Enforce HTTPS only; Cloud Run provides HTTPS endpoints.
+- Log sensitive events (auth, API calls) with structured logs; mask tokens in logs.
+- If org policies prevent repo‑level toggles, show read‑only flags and helpful error messages.
+
+CORE FUNCTIONAL REQUIREMENTS (with exact endpoints)
+A) AUTHENTICATION WITH GITHUB
+- Use **OAuth web application flow**:
+  1) Redirect: `GET https://github.com/login/oauth/authorize?client_id=...&redirect_uri=...&scope=...&state=...`
+  2) Callback: Exchange `code` for token: `POST https://github.com/login/oauth/access_token`
+  3) Use token to call GitHub REST APIs.
+- Alternative: **GitHub App** (fine‑grained, short‑lived tokens). Document install flow and permissions.
+
+B) LIST WORKFLOWS IN A REPOSITORY
+- `GET /repos/{owner}/{repo}/actions/workflows`
+- Render name, id, path, state.
+
+C) TRIGGER A WORKFLOW MANUALLY (workflow_dispatch)
+- Endpoint: `POST /repos/{owner}/{repo}/actions/workflows/{workflow_id_or_filename}/dispatches`
+- Body: `{ "ref": "main", "inputs": { ... } }`
+- **Constraint**: The workflow file must include `on: workflow_dispatch`. Provide a validation message if not present.
+
+D) VIEW WORKFLOW RUNS & JOBS (optional but recommended)
+- List runs: `GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs`
+- Get run: `GET /repos/{owner}/{repo}/actions/runs/{run_id}`
+- Get jobs: `GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs`
+- Link to logs download and web UI.
+
+E) READ/TOGGLE GITHUB ACTIONS PERMISSIONS (REPO LEVEL)
+- Read: `GET /repos/{owner}/{repo}/actions/permissions` (returns `enabled`, `allowed_actions`, etc.)
+- Set: `PUT /repos/{owner}/{repo}/actions/permissions` (e.g., `{ "enabled": false }` to disable; or `{ "enabled": true, "allowed_actions": "all|local_only|selected" }`).
+- Show a banner if org/enterprise policy overrides repo settings.
+
+F) ORG‑LEVEL ACTIONS POLICY (for admins)
+- Set org policy: `PUT /orgs/{org}/actions/permissions` with `enabled_repositories: all|none|selected` and `allowed_actions: all|local_only|selected`.
+- Manage selected repos: `GET/PUT /orgs/{org}/actions/permissions/repositories`.
+- **Note**: Requires `admin:org` scope (PAT) or GitHub App with org admin perms.
+
+GCP SETUP & DEPLOYMENT (Cloud Run + Secret Manager)
+1) Enable APIs: Cloud Run, Secret Manager.
+2) Create a service account for the Cloud Run service; grant `roles/secretmanager.secretAccessor`.
+3) Create secrets: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, optional `GITHUB_PAT` or **GitHub App** private key/token settings.
+4) Deploy container to Cloud Run:
+   - Dockerfile
+   - `gcloud run deploy` commands
+   - Configure environment vars (non‑sensitive) and mount Secret Manager values as env vars or volumes.
+5) (Optional) If you need static outbound IPs for calling IP‑restricted services, configure Serverless VPC Access + Cloud NAT; not required for GitHub.
+
+ARCHITECTURE & COMPONENTS
+- HTTP server (Express or Flask) with routes:
+  - `GET /login` → begin OAuth web flow
+  - `GET /oauth/callback` → exchange code for token; set session
+  - `GET /repos` → list repositories
+  - `GET /repos/:owner/:repo/workflows` → list workflows
+  - `POST /repos/:owner/:repo/workflows/:id/dispatch` → trigger
+  - `GET /repos/:owner/:repo/actions/permissions` → read Actions settings
+  - `PUT /repos/:owner/:repo/actions/permissions` → enable/disable
+  - (Optional) `GET /runs/:owner/:repo/:workflow_id` → list runs
+- Token storage: server‑side session or encrypted cache; DO NOT expose user tokens to client.
+- UI: simple pages with repo selector, workflow list, inputs form, toggle Actions switch, status cards.
+- Observability: Structured logs (JSON), request IDs, error boundaries, and GCP Logs Explorer integration.
+
+ENVIRONMENT & SECRETS
+- Public env (safe): `APP_BASE_URL`, `GITHUB_OAUTH_CLIENT_ID`.
+- Secret Manager (sensitive): `GITHUB_OAUTH_CLIENT_SECRET`, optional `GITHUB_PAT`, GitHub App creds.
+- Load secrets at startup (env var) or on demand (Secret Manager API call). Pin versions for predictability.
+
+PERMISSIONS MATRIX (choose minimum required)
+- **Trigger workflow**: PAT with `repo` for private repos (or `public_repo` for public only). GitHub App: `actions:write`, `metadata:read`.
+- **Read workflows**: `repo` (private) or none (public).
+- **Toggle repo Actions**: repo admin rights; endpoint is under Actions repository permissions.
+- **Org‑level policy**: `admin:org` scope.
+- UI must show permission errors clearly and suggest next steps.
+
+EDGE CASES & VALIDATIONS
+- Workflow doesn’t have `workflow_dispatch` → show instruction to add it.
+- Protected branches → `ref` must be allowed.
+- Org policy prevents changes → surface the policy message; disable controls.
+- Token scopes insufficient → show exact missing scope in error.
+- Rate limiting → respect `X-RateLimit-Remaining`; retry with backoff.
+
+DELIVERABLES (what to generate)
+A) Source code scaffold (Node.js preferred):
+- `src/server.ts|js` (Express server)
+- `src/github.ts` (Octokit or fetch wrappers)
+- `src/routes/*.ts|js` (auth, repos, workflows, actions)
+- `views/*` (minimal UI or SPA)
+- `Dockerfile`
+- `package.json` with scripts
+- `README.md` with setup instructions
+
+B) Configuration & deployment:
+- `.env.example` (non‑secrets)
+- Scripted `gcloud` commands to:
+  - enable APIs
+  - create secrets
+  - grant IAM roles
+  - build & deploy Cloud Run
+- Notes for Secret Manager mounting (env vars vs volumes) and pinning versions.
+
+C) API examples:
+- cURL for dispatch:
+  ```bash
+  curl -L -X POST     -H "Accept: application/vnd.github+json"     -H "Authorization: Bearer $GITHUB_TOKEN"     -H "X-GitHub-Api-Version: 2022-11-28"     https://api.github.com/repos/OWNER/REPO/actions/workflows/WORKFLOW_ID/dispatches     -d '{"ref":"main","inputs":{"deploy_env":"staging"}}'
+  ```
+
+- cURL for repo Actions permissions toggle:
+  ```bash
+  curl -L -X PUT     -H "Accept: application/vnd.github+json"     -H "Authorization: Bearer $GITHUB_TOKEN"     -H "X-GitHub-Api-Version: 2022-11-28"     https://api.github.com/repos/OWNER/REPO/actions/permissions     -d '{"enabled":false}'
+  ```
+
+D) Testing plan:
+- Unit tests for GitHub API wrappers (mock responses).
+- Integration tests against a test repo.
+- Manual E2E: login → pick repo → list workflows → dispatch → check run status → toggle Actions.
+
+E) UX flows (high level):
+- Flow 1: Login → Repos list → Repo detail → Workflows list → Dispatch modal (inputs, ref) → Status toast and run link.
+- Flow 2: Repo Actions settings card → Toggle ON/OFF → Success banner; show policy warnings if overridden by org.
+
+F) Error handling & messages:
+- Friendly, actionable errors: Missing scopes, invalid ref, workflow not dispatchable, policy enforced.
+- Include GitHub `documentation_url` in error details where provided.
+
+G) Optional Enhancements:
+- Save favorite repos/workflows on the server.
+- Webhooks to receive run updates.
+- Support `repository_dispatch` event type to trigger meta‑workflows.
+
+REFERENCES (include these links in README for developers)
+- GitHub OAuth web flow: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+- Workflows API (list, dispatch): https://docs.github.com/en/rest/actions/workflows
+- Create a workflow dispatch event: https://api.github.com/repos/:owner/:repo/actions/workflows/:workflow_id/dispatches (spec overview: https://www.postman.com/api-evangelist/api-specification-toolbox/request/yj5m0pj/create-a-workflow-dispatch-event )
+- Repo Actions settings UI & concepts: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository
+- Actions permissions APIs (org/repo): https://docs.github.com/en/rest/actions/permissions
+- Cloud Run basics (HTTPS service): https://docs.cloud.google.com/run/docs/triggering/https-request
+- Secret Manager with Cloud Run: https://docs.cloud.google.com/run/docs/configuring/services/secrets
+
+INSTRUCTIONS TO THE GENERATOR
+- Produce the full Node.js (Express) implementation with:
+  - OAuth routes, token exchange, and secure session storage
+  - GitHub API client wrapper (Octokit or native fetch)
+  - Pages/components for repo list, workflows list, dispatch form, Actions settings
+  - Dockerfile optimized for small image; health endpoint (`/healthz`) and readiness
+  - `gcloud` CLI snippets to build & deploy to Cloud Run, and to create/attach Secret Manager secrets
+  - README with step‑by‑step setup and screenshots (placeholders OK)
+- Include a minimal alternative Flask/FastAPI snippet showing equivalent endpoints.
+- Add comments near every call to GitHub APIs with the exact REST path and required scopes.
+- Implement robust error handling and display user‑friendly messages on the UI.
+- Document org‑level limitations clearly in README and UI.
+
+ACCEPTANCE CRITERIA
+- User can successfully OAuth‑login and see repositories.
+- User can list workflows and trigger a workflow that has `workflow_dispatch`, passing `ref` and inputs.
+- User can read and toggle Actions ON/OFF at repo level, with clear messages if blocked by org policy.
+- All secrets are sourced from Secret Manager; no plain secrets committed.
+- App runs on Cloud Run behind HTTPS; endpoints respond with appropriate status codes.
+- README includes the references above and explains scopes/permissions needed.
+
+OUTPUT FORMAT
+- Provide a repository layout, code files, and deployment commands.
+- Include example `.env.example` and Secret Manager integration notes.
+- Provide a demo script to validate end‑to‑end.
+
+---
+ADDED MODULES (MERGED): MULTI‑ACCOUNT OAUTH + PERSISTENT TOKEN STORAGE + RE‑LOGIN LOGIC + DATABASE PROVIDER CHOICE (DEFAULT: FIRESTORE) + COST ANALYSIS
+
+MULTI‑ACCOUNT (OAuth App) SUPPORT — STORAGE DESIGN
+- **Accounts table/collection**: `{ label, username, user_id, provider: 'github', encrypted_token (AES‑256‑GCM), iv, scopes, created_at, updated_at }`
+- **Encryption**: AES‑256‑GCM with 32‑byte `DATA_ENCRYPTION_KEY` from Secret Manager (Base64). Store ciphertext + IV; never store raw tokens.
+- **Add Account flow**: `GET /login?label=...` → OAuth → `/oauth/callback` (exchange code → token) → `GET /user` → encrypt & save token → appears in `GET /accounts`.
+- **Switch Account flow**: `POST /use-account { label }` → store active label in session → backend decrypts token at call time and uses it for GitHub API calls.
+- **Remove Account flow**: `DELETE /accounts/:label` → secure deletion of DB row and associated metadata.
+
+PERSISTENT TOKEN STORAGE & RE‑LOGIN LOGIC (EXPLANATION)
+- **Token lifetime (OAuth App)**: access tokens are long‑lived and remain valid until the user **revokes** the app’s access in GitHub settings or you delete them.
+- **One‑time login per account**: once added, tokens can be reused **days/weeks/months later** without requiring re‑login.
+- **Resumption**: on any day, select the saved account; backend decrypts the stored token to call GitHub APIs.
+- **Revocation handling**: if GitHub returns 401/403 (revoked or insufficient scopes), surface a clear message and offer **Re‑authenticate** (restart OAuth) or **Remove account** options.
+- **Key rotation**: support re‑encryption of stored tokens if `DATA_ENCRYPTION_KEY` changes.
+
+DATABASE ABSTRACTION & PROVIDER CHOICE (DEFAULT: FIRESTORE; FUTURE: POSTGRES/MONGODB)
+- Implement a **storage interface** (e.g., `IAccountsStore`) with methods: `addAccount`, `getAccountByLabel`, `listAccounts`, `removeAccount`, `updateAccount`.
+- Provide a **Firestore adapter** now (default) and **stubs/adapters** for **PostgreSQL** and **MongoDB**.
+- Use env var `DB_PROVIDER` to select provider at runtime: `firestore` (default), `postgres`, `mongo`.
+- Keep **encryption** in the business layer (before persistence) so provider changes do **not** affect security logic or routes.
+- README must include Firestore setup, and instructions to switch provider without code changes (only env/DSN updates).
+
+CLOUD RUN COST & FREE TIER (PER PROJECT)
+- Free tier: 2M requests/mo; 360k vCPU‑seconds/mo; 360k GiB‑seconds/mo; 1GB egress/mo.
+- Beyond free tier pricing: Requests $0.40/million; CPU $0.000024/vCPU‑sec; Memory $0.0000027/GiB‑sec; Egress $0.12/GB.
+- Example: 1M extra requests → $0.40; 100k vCPU‑seconds → $2.40; 1GB egress → $0.12.
+- Include cost section in README + tips to keep costs low (small image, min‑instances=0, short caching, connection reuse).
+
+COST CALCULATOR (INCLUDE IN README)
+```python
+requests = 30000
+vCPU_seconds = 1500
+GiB_seconds = 1500
+outbound_GB = 0.5
+FREE_REQUESTS = 2_000_000
+FREE_VCPU_SECONDS = 360_000
+FREE_GiB_SECONDS = 360_000
+FREE_OUTBOUND_GB = 1
+PRICE_PER_MILLION_REQUESTS = 0.40
+PRICE_PER_VCPU_SECOND = 0.000024
+PRICE_PER_GiB_SECOND = 0.0000027
+PRICE_PER_GB = 0.12
+billable_requests = max(0, requests - FREE_REQUESTS)
+billable_vCPU = max(0, vCPU_seconds - FREE_VCPU_SECONDS)
+billable_GiB = max(0, GiB_seconds - FREE_GiB_SECONDS)
+billable_outbound = max(0, outbound_GB - FREE_OUTBOUND_GB)
+cost_requests = (billable_requests / 1_000_000) * PRICE_PER_MILLION_REQUESTS
+cost_vCPU = billable_vCPU * PRICE_PER_VCPU_SECOND
+cost_GiB = billable_GiB * PRICE_PER_GiB_SECOND
+cost_outbound = billable_outbound * PRICE_PER_GB
+total_cost = cost_requests + cost_vCPU + cost_GiB + cost_outbound
+print(f"Estimated monthly cost: ${total_cost:.2f}")
+```
+
+REFERENCES (ADD TO README)
+- GitHub OAuth web flow: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+- Workflows API: https://docs.github.com/en/rest/actions/workflows
+- Actions permissions API: https://docs.github.com/en/rest/actions/permissions
+- Cloud Run HTTPS: https://docs.cloud.google.com/run/docs/triggering/https-request
+- Secret Manager: https://docs.cloud.google.com/run/docs/configuring/services/secrets
+
+
+===========================================
+
+[Merged from File Two]
+
+ADDENDUM — DATABASE ABSTRACTION & PROVIDER CHOICE (DEFAULT: FIRESTORE; FUTURE: POSTGRES/MONGODB)
+
+OBJECTIVE
+Start with **Firestore** now, but keep the app **DB‑agnostic** so you can switch to **PostgreSQL (Cloud SQL)** or **MongoDB** later **without changing routes/controllers**.
+
+PATTERN
+• Define an interface `IAccountsStore` with methods: addAccount, getAccountByLabel, listAccounts, removeAccount, updateAccount.
+• Provide a **Firestore adapter** now (default) and stubs/adapters for **Postgres** and **Mongo**.
+• Runtime selection via `DB_PROVIDER` env var: `firestore` (default), `postgres`, `mongo`.
+• Keep encryption in business layer **before persistence** so provider changes do not affect security.
+
+FIRESTORE SETUP (DEFAULT)
+• Create Firestore (Native mode) in console; the API is enabled automatically when you create the database.
+• Grant the Cloud Run service account **roles/datastore.user** (read/write) or **roles/datastore.viewer** (read‑only).
+• Use collection name `accounts` (one document per `label`).
+• Config: `DB_PROVIDER=firestore`; Firestore SDK uses the Cloud Run service account (no key files required).
+
+POSTGRES (CLOUD SQL) — PROVIDER NOTES (FUTURE OPTION)
+• Enable **Cloud SQL Admin API**, **Cloud Run**, **Service Networking**.
+• Connect from Cloud Run using Unix domain socket: **/cloudsql/PROJECT:REGION:INSTANCE** (some libraries require the `.s.PGSQL.5432` suffix).
+• Grant Cloud Run service account **roles/cloudsql.client**.
+• Env vars:
+  - `DB_PROVIDER=postgres`
+  - Either `POSTGRES_DSN=postgres://user:pass@/cloudsql/PROJECT:REGION:INSTANCE/dbname`
+  - Or set `DB_HOST=/cloudsql/PROJECT:REGION:INSTANCE`, `DB_USER`, `DB_PASS`, `DB_NAME`.
+
+MONGODB (ATLAS OR SELF‑HOSTED) — PROVIDER NOTES (FUTURE OPTION)
+• Connection pooling: create a single global `MongoClient` and reuse across requests (avoid opening a new client per request).
+• Networking: prefer Private Endpoint/peering or NAT + IP allowlist; avoid `0.0.0.0/0`. For large sharded clusters, consider `srvMaxHosts` to limit driver connections.
+• Env vars:
+  - `DB_PROVIDER=mongo`
+  - `MONGO_URI=mongodb+srv://user:pass@cluster/dbname?retryWrites=true&w=majority[&srvMaxHosts=3]`
+• Reuse the global client across requests.
+
+INSTRUCTIONS TO THE GENERATOR
+• Generate:
+  - The `IAccountsStore` interface
+  - A **Firestore adapter** implementing the interface (default)
+  - A **provider factory** that picks the adapter via `DB_PROVIDER`
+  - README sections with Firestore setup steps, IAM role guidance, and future switching instructions (Postgres/Mongo) without code changes.
+• Enforce that encryption (AES‑256‑GCM) happens **before** persistence so provider switching does not affect security logic.
+
+
+"Require authentication before showing any Ul" in your prompt:
+• Jules Will:
+• Generate a Login page as the default route.
+• Add middleware to check session before serving any management routes.
+• Redirect unauthenticated users to /login.
+• Include instructions in README for GitHub Auth setup.
+• The app will never show repo/workflow controls unless the user is logged in.
+
+ADDENDUM — Access Control & Authentication (Login-first UX)
+• Default route shows only a "Sign in with GitHub" page if not authenticated.
+• Middleware on ALL routes: if session.user is absent → 302 redirect to /login.
+• After GitHub Auth succeeds, set secure session; then render management UI.
+• Add optional allowlist check: only permit usernames from a configured list or org.
+• Do NOT expose any repo/workflow/Actions UI or APIs without session.
+• Document steps in README under "Access Control" and "Auth Required for UI".
+• (Optional) Add instructions to enable Cloud Run "Require Authentication"/IAP for an extra perimeter gate.
+
+
+ADDENDUM — Access Control & Authentication (Login-first UX) — Implementation Required
+Maintain original requirements. Add the following implementation and documentation without rewriting existing text:
+1. Global Auth Guard (Express)
+• Apply authentication middleware to all routes except /login and /oauth/callback.
+• Middleware logic:
+    • If session.user is absent → 302 redirect to /login.
+    • If session.user is present → continue.
+• Place middleware after public routes and before protected routes.
+Express example (include in the codebase):
+// authMiddleware.js
+function authMiddleware(req, res, next) {
+  if (!req.session || !req.session.user) {
+    return res.redirect('/login');
+  }
+
+  // Optional allowlist
+  const allowedUsers = (process.env.ALLOWED_USERS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (allowedUsers.length && !allowedUsers.includes(req.session.user.username)) {
+    return res.status(403).send('Access denied: You are not authorized.');
+  }
+
+  next();
+}
+module.exports = authMiddleware;
+
+// server setup (apply globally)
+const express = require('express');
+const session = require('express-session');
+const authMiddleware = require('./authMiddleware');
+
+const app = express();
+
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: true } // true on HTTPS/Cloud Run
+}));
+
+// Public (no guard)
+app.get('/login', startGitHubOAuth);
+app.get('/oauth/callback', handleOAuthCallback);
+
+// Protected (guard everything else)
+app.use(authMiddleware);
+
+// Existing protected routes remain as-is:
+app.get('/repos', listRepos);
+app.get('/repos/:owner/:repo/workflows', listWorkflows);
+app.post('/repos/:owner/:repo/workflows/:id/dispatch', dispatchWorkflow);
+app.get('/repos/:owner/:repo/actions/permissions', getRepoActionsPermissions);
+app.put('/repos/:owner/:repo/actions/permissions', setRepoActionsPermissions);
+// ... etc.
+
+2. Allowlist Configuration
+• Add .env.example entry:
+ALLOWED_USERS=alice,bob,charlie
+• In README, document that setting ALLOWED_USERS restricts access to only those GitHub usernames. If empty, any authenticated user is allowed.
+3. Login-first UX
+• Default route for unauthenticated users shows only “Sign in with GitHub” UI. No repos/workflows/actions are rendered until authenticated.
+• Ensure server-side rendering uses session.user to gate all sensitive UI.
+4. README — Access Control Section
+• Add a section “Access Control & Auth Required for UI” describing:
+    • Global auth middleware.
+    • Allowlist behavior and configuration.
+    • Note: For extra perimeter security, optionally enable Cloud Run ‘Require Authentication’ or IAP (do not remove app-level guards).
+5. Testing
+• Add tests to verify:
+    • Unauthenticated requests to protected routes → redirect to /login.
+    • Authenticated but non-allowlisted user → 403 Access denied.
+    • Authenticated and allowlisted user → normal access.
+Acceptance Update
+• The app must not expose any repo/workflow/Actions UI or API without an authenticated session and must honor ALLOWED_USERS when configured.
+
